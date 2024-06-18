@@ -449,8 +449,4 @@ int primary_display_config_full_roi(struct disp_ddp_path_config *pconfig,
 				    struct cmdqRecStruct *cmdq_handle);
 int primary_display_set_scenario(int scenario);
 enum DISP_MODULE_ENUM _get_dst_module_by_lcm(struct disp_lcm_handle *plcm);
-#if defined(CONFIG_SMCDSD_PANEL) && defined(CONFIG_SMCDSD_PROTOS_PLUS)
-int primary_display_set_aod(int enter_suspend);
-int primary_display_get_protos_mode(void);
-#endif
 #endif

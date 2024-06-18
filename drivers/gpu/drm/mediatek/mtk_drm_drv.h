@@ -58,6 +58,8 @@ struct mtk_drm_private {
 	struct drm_atomic_state *suspend_state;
 	struct drm_fb_helper fb_helper;
 	struct drm_gem_object *fbdev_bo;
+
+	struct mtk_uevent_dev uevent_data;
 };
 
 extern struct platform_driver mtk_ddp_driver;

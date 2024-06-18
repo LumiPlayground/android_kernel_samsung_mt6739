@@ -390,11 +390,7 @@ void disp_helper_option_init(void)
 	disp_helper_set_option(DISP_OPT_OVL_EXT_LAYER, 1);
 
 	disp_helper_set_option(DISP_OPT_REG_PARSER_RAW_DUMP, 0);
-#if defined(CONFIG_SMCDSD_PANEL) && defined(CONFIG_SMCDSD_PROTOS_PLUS)
-	disp_helper_set_option(DISP_OPT_AOD, 1);
-#else
 	disp_helper_set_option(DISP_OPT_AOD, 0);
-#endif
 	disp_helper_set_option(DISP_OPT_RSZ, 0);
 	disp_helper_set_option(DISP_OPT_DUAL_PIPE, 0);
 

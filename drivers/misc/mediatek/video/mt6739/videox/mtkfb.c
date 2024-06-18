@@ -214,9 +214,10 @@ static int mtkfb_blank(int blank_mode, struct fb_info *info)
 {
 	enum mtkfb_power_mode prev_pm = primary_display_get_power_mode();
 
+#if defined(CONFIG_SMCDSD_PANEL)
 	pr_info("%s + blank_mode: %d, %s\n",
 			__func__, blank_mode, blank_mode == FB_BLANK_UNBLANK ? "UNBLANK" : "POWERDOWN");
-
+#endif
 	switch (blank_mode) {
 	case FB_BLANK_UNBLANK:
 	case FB_BLANK_NORMAL:
@@ -226,29 +227,16 @@ static int mtkfb_blank(int blank_mode, struct fb_info *info)
 				bypass_blank);
 			break;
 		}
-
-#if defined(CONFIG_SMCDSD_PANEL) && defined(CONFIG_SMCDSD_PROTOS_PLUS)
-		if (prev_pm == DOZE_SUSPEND) {
-			pr_info("%s At first set DOZE\n",__func__);
-			primary_display_set_aod(0); /* at first set DOZE */
-			prev_pm = DOZE;
-		}
 		primary_display_set_power_mode(FB_RESUME);
 		mtkfb_late_resume();
 
 		debug_print_power_mode_check(prev_pm, FB_RESUME);
-
-#else
-		primary_display_set_power_mode(FB_RESUME);
-		mtkfb_late_resume();
-
-		debug_print_power_mode_check(prev_pm, FB_RESUME);
-#endif
-
+#if !defined(CONFIG_SMCDSD_PANEL)
 		if (!lcd_fps)
 			msleep(30);
 		else
 			msleep(2 * 100000 / lcd_fps); /* Delay 2 frames. */
+#endif
 		break;
 	case FB_BLANK_VSYNC_SUSPEND:
 	case FB_BLANK_HSYNC_SUSPEND:
@@ -261,30 +249,19 @@ static int mtkfb_blank(int blank_mode, struct fb_info *info)
 			break;
 		}
 
-#if defined(CONFIG_SMCDSD_PANEL) && defined(CONFIG_SMCDSD_PROTOS_PLUS)
-		if (primary_display_get_protos_mode() == 1) {
-			pr_info("%s FB_SUSPEND call in PROTOS_READY state converted to DOZE_SUSPEND\n",__func__);
-			primary_display_set_aod(0); /* at first set DOZE */
-			primary_display_set_aod(1); /* now set DOZE_SUSPEND */
-		} else {
-			primary_display_set_power_mode(FB_SUSPEND);
-			mtkfb_early_suspend();
-
-			debug_print_power_mode_check(prev_pm, FB_SUSPEND);
-		}
-#else
 		primary_display_set_power_mode(FB_SUSPEND);
 		mtkfb_early_suspend();
 
 		debug_print_power_mode_check(prev_pm, FB_SUSPEND);
-#endif
 
 		break;
 	default:
 		return -EINVAL;
 	}
 
+#if defined(CONFIG_SMCDSD_PANEL)
 	pr_info("%s - blank_mode: %d\n", __func__, blank_mode);
+#endif
 
 	return 0;
 }
@@ -2632,17 +2609,15 @@ int mtkfb_ipo_init(void)
 }
 
 #if defined(CONFIG_SMCDSD_PANEL)
-static void mtkfb_shutdown(struct device *dev)
+static void mtkfb_shutdown(struct platform_device *pdev)
 {
-	enum mtkfb_power_mode prev_pm = primary_display_get_power_mode();
-	struct mtkfb_device *fbdev = dev_get_drvdata(dev);
+	struct mtkfb_device *fbdev = dev_get_drvdata(&pdev->dev);
 
-	DISPMSG("%s: ++\n", __func__);
 	MTKFB_LOG("[FB Driver] %s()\n", __func__);
 	pr_info("%s: ++\n", __func__);
 
 	if (!lock_fb_info((fbdev->fb_info))) {
-		MTKFB_LOG("%s: fblock is failed\n", __func__);
+		pr_info("%s: fblock is failed\n", __func__);
 		return;
 	}
 
@@ -2655,13 +2630,11 @@ static void mtkfb_shutdown(struct device *dev)
 	primary_display_set_power_mode(FB_SUSPEND);
 	primary_display_suspend();
 
-	debug_print_power_mode_check(prev_pm, FB_SUSPEND);
 	smcdsd_simple_notifier_call_chain(FB_EVENT_BLANK, FB_BLANK_POWERDOWN);
 	unlock_fb_info(fbdev->fb_info);
 
-	pr_info("%s: --\n", __func__);
 	MTKFB_LOG("[FB Driver] leave %s\n", __func__);
-	DISPMSG("%s: --\n", __func__);
+	pr_info("%s: --\n", __func__);
 }
 #else
 static void mtkfb_shutdown(struct device *pdev)

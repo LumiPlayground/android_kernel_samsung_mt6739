@@ -504,6 +504,10 @@ static int mtk_drm_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_pm;
 
+	private->uevent_data.name = "lcm_disconnect";
+	uevent_dev_register(&private->uevent_data);
+	mtk_notifier_activate();
+
 	return 0;
 
 err_pm:

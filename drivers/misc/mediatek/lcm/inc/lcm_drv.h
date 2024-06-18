@@ -17,8 +17,13 @@
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+
 #if defined(CONFIG_SMCDSD_PANEL)
 #include "smcdsd_notify.h"
+#include "smcdsd_abd.h"
+extern unsigned int rx_offset;
+extern unsigned char data_type;
+extern unsigned int gpara_len;
 #endif
 
 #ifndef ARY_SIZE
@@ -935,6 +940,13 @@ struct LCM_DRIVER {
 	void (*suspend_power)(void);
 	void (*resume_power)(void);
 
+#if defined(CONFIG_SMCDSD_PANEL)
+	void (*cmdq)(unsigned int enable);
+	void (*power_enable)(unsigned int enable);
+	void (*disable)(void);
+	bool (*path_lock)(bool en);
+#endif
+
 	void (*update)(unsigned int x, unsigned int y, unsigned int width,
 			unsigned int height);
 	unsigned int (*compare_id)(void);
@@ -948,6 +960,7 @@ struct LCM_DRIVER {
 	bool (*get_hbm_wait)(void);
 	bool (*set_hbm_wait)(bool wait);
 	bool (*set_hbm_cmdq)(bool en, void *qhandle);
+	bool (*framedone_notify)(void);
 	void (*set_pwm)(unsigned int divider);
 	unsigned int (*get_pwm)(unsigned int divider);
 	void (*set_backlight_mode)(unsigned int mode);
@@ -979,15 +992,6 @@ struct LCM_DRIVER {
 		unsigned int *lcm_count, unsigned int *lcm_value);
 	/* /////////////PWM///////////////////////////// */
 	void (*set_pwm_for_mix)(int enable);
-
-#if defined(CONFIG_SMCDSD_PANEL)
-	void (*cmd_q)(unsigned int enable);
-	void (*reset_disable)(void);
-	void (*reset_enable)(void);
-#if defined(CONFIG_SMCDSD_PROTOS_PLUS)
-	int (*get_protos_mode)(void);
-#endif
-#endif
 
 	void (*aod)(int enter);
 };

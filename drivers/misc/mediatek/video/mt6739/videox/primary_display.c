@@ -100,6 +100,7 @@
 #include "disp_partial.h"
 #include "ddp_aal.h"
 #include "ddp_gamma.h"
+#include "mtk_notify.h"
 
 #define MMSYS_CLK_LOW (0)
 #define MMSYS_CLK_HIGH (1)
@@ -175,6 +176,9 @@ DECLARE_WAIT_QUEUE_HEAD(decouple_trigger_wq);
 wait_queue_head_t primary_display_present_fence_wq;
 atomic_t primary_display_pt_fence_update_event = ATOMIC_INIT(0);
 static unsigned int _need_lfr_check(void);
+
+struct mtk_uevent_dev uevent_data;
+EXPORT_SYMBOL(uevent_data);
 
 #ifdef CONFIG_MTK_DISPLAY_120HZ_SUPPORT
 static int od_need_start;
@@ -449,12 +453,8 @@ enum mtkfb_power_mode primary_display_get_power_mode(void)
 
 bool primary_is_aod_supported(void)
 {
-#if defined(CONFIG_SMCDSD_PANEL) && defined(CONFIG_SMCDSD_PROTOS_PLUS)
-	if (disp_helper_get_option(DISP_OPT_AOD))
-#else
 	if (disp_helper_get_option(DISP_OPT_AOD) &&
 	    !disp_lcm_is_video_mode(pgc->plcm))
-#endif
 		return 1;
 
 	return 0;
@@ -3696,6 +3696,9 @@ int primary_display_init(char *lcm_name, unsigned int lcm_fps,
 	ret = switch_dev_register(&disp_switch_data);
 #endif
 
+	uevent_data.name = "lcm_disconnect";
+	uevent_dev_register(&uevent_data);
+
 	DISPCHECK("%s: done\n", __func__);
 done:
 	if (disp_helper_get_stage() != DISP_HELPER_STAGE_NORMAL)
@@ -4147,17 +4150,26 @@ int primary_display_suspend(void)
 	if (primary_display_is_video_mode())
 		primary_display_switch_dst_mode(0);
 #endif
+#if defined(CONFIG_SMCDSD_PANEL)
+	disp_lcm_path_lock(1, pgc->plcm);
+#endif
 	_primary_path_switch_dst_lock();
 	disp_sw_mutex_lock(&(pgc->capture_lock));
 	_primary_path_lock(__func__);
 
 	while (primary_get_state() == DISP_BLANK) {
 		_primary_path_unlock(__func__);
+#if defined(CONFIG_SMCDSD_PANEL)
+		disp_lcm_path_lock(0, pgc->plcm);
+#endif
 		DISPCHECK("%s wait tui finish!!\n", __func__);
 #ifdef CONFIG_TRUSTONIC_TRUSTED_UI
 		switch_set_state(&disp_switch_data, DISP_SLEPT);
 #endif
 		primary_display_wait_state(DISP_ALIVE, MAX_SCHEDULE_TIMEOUT);
+#if defined(CONFIG_SMCDSD_PANEL)
+		disp_lcm_path_lock(1, pgc->plcm);
+#endif
 		_primary_path_lock(__func__);
 		DISPCHECK("%s wait tui done stat=%d\n",
 			  __func__, primary_get_state());
@@ -4215,6 +4227,14 @@ int primary_display_suspend(void)
 	mmprofile_log_ex(ddp_mmp_get_events()->primary_suspend,
 			 MMPROFILE_FLAG_PULSE, 0, 2);
 
+#if defined(CONFIG_SMCDSD_PANEL)
+	if (primary_display_get_power_mode_nolock() == FB_SUSPEND)
+		disp_lcm_disable(pgc->plcm);
+
+	/* From now, MIPI TX command will be written on register directly */
+	disp_lcm_cmdq(pgc->plcm, 0);
+#endif
+
 	if (disp_helper_get_option(DISP_OPT_USE_CMDQ)) {
 		DISPCHECK("[POWER]display cmdq trigger loop stop\n");
 		_cmdq_stop_trigger_loop();
@@ -4262,25 +4282,18 @@ int primary_display_suspend(void)
 		primary_display_set_lcm_power_state_nolock(LCM_OFF);
 	}
 
-#if defined(CONFIG_SMCDSD_PANEL)
-	if (primary_display_get_power_mode_nolock() == FB_SUSPEND)
-		disp_lcm_reset_disable(pgc->plcm);
-#endif
-
 	DISPDBG("[POWER]dpmanager path power off[begin]\n");
 	primary_display_power_control(0);
 
 	DISPCHECK("[POWER]dpmanager path power off[end]\n");
-	
-#if defined(CONFIG_SMCDSD_PANEL)
-	if (primary_display_get_power_mode_nolock() == FB_SUSPEND)
-		disp_lcm_suspend_power(pgc->plcm);
-#endif
-
 	mmprofile_log_ex(ddp_mmp_get_events()->primary_suspend,
 			 MMPROFILE_FLAG_PULSE, 0, 8);
 
 	pgc->lcm_refresh_rate = 60;
+#if defined(CONFIG_SMCDSD_PANEL)
+	if (primary_display_get_power_mode_nolock() == FB_SUSPEND)
+		disp_lcm_power_enable(pgc->plcm, 0);
+#endif
 /* pgc->state = DISP_SLEPT; */
 done:
 	primary_set_state(DISP_SLEPT);
@@ -4290,6 +4303,9 @@ done:
 		primary_display_esd_check_enable(0);
 
 	_primary_path_unlock(__func__);
+#if defined(CONFIG_SMCDSD_PANEL)
+	disp_lcm_path_lock(0, pgc->plcm);
+#endif
 	disp_sw_mutex_unlock(&(pgc->capture_lock));
 	_primary_path_switch_dst_unlock();
 
@@ -4372,16 +4388,16 @@ int primary_display_resume(void)
 	mmprofile_log_ex(ddp_mmp_get_events()->primary_resume,
 			 MMPROFILE_FLAG_START, 0, 0);
 
+#if defined(CONFIG_SMCDSD_PANEL)
+/*
+ *	@ disp_lcm_path_lock
+ *	LCM lock -> primary display lock.
+ */
+	disp_lcm_path_lock(1, pgc->plcm);
+#endif
 	_primary_path_lock(__func__);
 	if (pgc->state == DISP_ALIVE) {
 		DISPCHECK("primary display path is already resume, skip\n");
-#if defined(CONFIG_SMCDSD_PANEL) && defined(CONFIG_SMCDSD_PROTOS_PLUS)
-		if ((primary_display_get_protos_mode() == 1 &&
-				primary_display_get_power_mode_nolock() != DOZE) ||
-					primary_display_get_protos_mode() == 2 ||
-						primary_display_get_protos_mode() == 3)
-			disp_lcm_set_display_on(pgc->plcm);
-#endif
 		goto done;
 	}
 	mmprofile_log_ex(ddp_mmp_get_events()->primary_resume,
@@ -4410,35 +4426,18 @@ int primary_display_resume(void)
 		if (dsi_force_config)
 			DSI_ForceConfig(1);
 	}
-	dvfsrc_mdsrclkena_control_nolock(1);
 #if defined(CONFIG_SMCDSD_PANEL)
-	if (primary_display_get_power_mode_nolock() == FB_RESUME) {
-		if (primary_display_get_lcm_power_state_nolock() != LCM_ON) {
-			if (primary_display_get_lcm_power_state_nolock() !=
-			    LCM_ON_LOW_POWER) {
-					DISPDBG("[POWER]lcm resume power[begin]\n");
-					disp_lcm_resume_power(pgc->plcm);
-					DISPCHECK("[POWER]lcm resume power[end]\n");
-			}
-		}
-	}
+	if ((primary_display_get_power_mode_nolock() == FB_RESUME) ||
+		(primary_display_get_power_mode_nolock() == DOZE))
+		disp_lcm_power_enable(pgc->plcm, 1);
 #endif
+
+	dvfsrc_mdsrclkena_control_nolock(1);
 	DISPDBG("dpmanager path power on[begin]\n");
 	primary_display_power_control(1);
 
 	DISPCHECK("dpmanager path power on[end]\n");
-#if defined(CONFIG_SMCDSD_PANEL)
-	if (primary_display_get_power_mode_nolock() == FB_RESUME) {
-		if (primary_display_get_lcm_power_state_nolock() != LCM_ON) {
-			if (primary_display_get_lcm_power_state_nolock() !=
-			    LCM_ON_LOW_POWER) {
-					DISPDBG("[POWER]lcm reset enable[begin]\n");
-					disp_lcm_reset_enable(pgc->plcm);
-					DISPCHECK("[POWER]lcm reset enable[end]\n");
-			}
-		}
-	}
-#endif
+
 	DISPINFO("dpmanager path reset[begin]\n");
 	dpmgr_path_reset(pgc->dpmgr_handle, CMDQ_DISABLE);
 	DISPINFO("dpmanager path reset[end]\n");
@@ -4554,18 +4553,6 @@ int primary_display_resume(void)
 	mmprofile_log_ex(ddp_mmp_get_events()->primary_resume,
 			 MMPROFILE_FLAG_PULSE, 0, 3);
 
-#if defined(CONFIG_SMCDSD_PANEL) && defined(CONFIG_SMCDSD_PROTOS_PLUS)
-	if (primary_display_get_power_mode_nolock() == DOZE) {
-		if (primary_display_get_lcm_power_state_nolock() ==
-		    LCM_ON_LOW_POWER) {
-			if (pgc->plcm->drv->aod)
-				disp_lcm_aod(pgc->plcm, 0);
-			else
-				disp_lcm_resume(pgc->plcm);
-			primary_display_set_lcm_power_state_nolock(
-				LCM_ON);
-		}
-#else
 	if (primary_display_get_power_mode_nolock() == DOZE) {
 		if (primary_display_get_lcm_power_state_nolock() !=
 		    LCM_ON_LOW_POWER) {
@@ -4576,8 +4563,6 @@ int primary_display_resume(void)
 			primary_display_set_lcm_power_state_nolock(
 				LCM_ON_LOW_POWER);
 		}
-#endif
-
 	} else if (primary_display_get_power_mode_nolock() == FB_RESUME) {
 		if (primary_display_get_lcm_power_state_nolock() != LCM_ON) {
 			DISPDBG("[POWER]lcm resume[begin]\n");
@@ -4670,6 +4655,11 @@ int primary_display_resume(void)
 	mmprofile_log_ex(ddp_mmp_get_events()->primary_resume,
 			 MMPROFILE_FLAG_PULSE, 0, 9);
 
+#if defined(CONFIG_SMCDSD_PANEL)
+	/* From now, MIPI TX command will be written via CMDQ engine */
+	disp_lcm_cmdq(pgc->plcm, 1);
+#endif
+
 	/* primary_display_diagnose(); */
 	mmprofile_log_ex(ddp_mmp_get_events()->primary_resume,
 			 MMPROFILE_FLAG_PULSE, 0, 10);
@@ -4745,6 +4735,9 @@ done:
 		primary_display_esd_check_enable(1);
 
 	_primary_path_unlock(__func__);
+#if defined(CONFIG_SMCDSD_PANEL)
+	disp_lcm_path_lock(0, pgc->plcm);
+#endif
 	DISPMSG("skip_update:%d\n", skip_update);
 
 	aee_kernel_wdt_kick_Powkey_api("mtkfb_late_resume", WDT_SETBY_Display);
@@ -8360,71 +8353,3 @@ int primary_display_set_scenario(int scenario)
 
 	return ret;
 }
-
-#if defined(CONFIG_SMCDSD_PANEL) && defined(CONFIG_SMCDSD_PROTOS_PLUS)
-int primary_display_set_aod(int enter_suspend)
-{
-	int ret = DISP_STATUS_OK;
-	enum mtkfb_aod_power_mode aod_pm = MTKFB_AOD_POWER_MODE_ERROR;
-	enum mtkfb_power_mode prev_pm =
-		primary_display_get_power_mode();
-	if (enter_suspend == 1) {
-		aod_pm = MTKFB_AOD_DOZE_SUSPEND;
-	} else {
-		aod_pm = MTKFB_AOD_DOZE;
-	}
-	DISPCHECK("%s mode: %s\n", __func__,
-		  aod_pm ? "AOD_DOZE_SUSPEND" : "AOD_DOZE");
-	if (!primary_is_aod_supported()) {
-		DISPCHECK("AOD: feature not support\n");
-		return ret;
-	}
-	if (aod_pm == MTKFB_AOD_DOZE_SUSPEND) {
-		/*
-		 * First DOZE to power on dispsys and
-		 * LCM(low power mode). Then DOZE_SUSPEND to
-		 * power off dispsys.
-		 */
-		DISPDBG("AOD: %s enter MTKFB_AOD_DOZE_SUSPEND \n", __func__);
-		if (primary_display_is_sleepd() &&
-		    primary_display_get_lcm_power_state()) {
-			DISPERR("AOD: Need to set DOZE first\n");
-			primary_display_set_power_mode(DOZE);
-			primary_display_resume();
-			debug_print_power_mode_check(prev_pm, DOZE);
-		}
-		primary_display_set_power_mode(DOZE_SUSPEND);
-		ret = primary_display_suspend();
-		debug_print_power_mode_check(prev_pm, DOZE_SUSPEND);
-	} else if (aod_pm == MTKFB_AOD_DOZE) {
-		DISPDBG("AOD: %s enter MTKFB_AOD_DOZE \n", __func__);
-		primary_display_set_power_mode(DOZE);
-		ret = primary_display_resume();
-			debug_print_power_mode_check(prev_pm, DOZE);
-	}
-	if (ret < 0)
-		DISPERR("AOD: set %s failed\n",
-			aod_pm ? "AOD_SUSPEND" : "AOD_RESUME");
-	return ret;
-}
-
-
-int primary_display_get_protos_mode(void)
-{
-	if (!(pgc->plcm)) {
-		DISPERR("lcm handle is null\n");
-		return 0;
-	}
-
-	if (!(pgc->plcm->drv)) {
-		DISPERR("lcm driver is null\n");
-		return 0;
-	}
-
-	if (pgc->plcm->drv->get_protos_mode)
-		return pgc->plcm->drv->get_protos_mode();
-
-	DISPERR("get_protos_mode is null!\n");
-	return 0;
-}
-#endif
